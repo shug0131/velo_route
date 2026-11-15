@@ -59,9 +59,14 @@ export function ElevationTelemetryTray({
     return { coords, linePath, areaPath, totalDist, minEle, maxEle };
   }, [course]);
 
-  // Stepped target watt overlay path when a distance workout is active
+  // Stepped target watt overlay path when a distance-based workout is active
   const workoutStepPath = useMemo(() => {
-    if (!activeWorkout || !workoutModeEnabled || activeWorkout.segments.length === 0) {
+    if (
+      !activeWorkout ||
+      !workoutModeEnabled ||
+      activeWorkout.basis === 'time' ||
+      activeWorkout.segments.length === 0
+    ) {
       return null;
     }
     const totalDist = Math.max(1, course.totalDistanceMeters);
@@ -136,7 +141,7 @@ export function ElevationTelemetryTray({
 
   const hovered = hoverIndex !== null && profileData ? profileData.coords[hoverIndex] : null;
   const hoveredWorkoutTarget =
-    hovered && activeWorkout && workoutModeEnabled
+    hovered && activeWorkout && workoutModeEnabled && activeWorkout.basis !== 'time'
       ? getWorkoutTargetAtDistance(activeWorkout, hovered.pt.distanceMeters).targetWatts
       : null;
 

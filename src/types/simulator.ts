@@ -32,7 +32,6 @@ export interface VirtualGearSpec {
 }
 
 export type TrainerMode = 'sim' | 'erg';
-export type CoachingMode = 'watts' | 'speed' | 'both';
 export type EffortCue = 'harder' | 'easier' | 'on-target' | 'idle';
 
 export interface CoachingStatus {
@@ -40,7 +39,6 @@ export interface CoachingStatus {
   headline: string;
   detail: string;
   wattDelta: number; // positive = need more watts, negative = over target
-  speedDeltaKmh: number; // positive = need faster speed, negative = over target
 }
 
 export interface RiderConfig {
@@ -83,7 +81,6 @@ export interface TelemetrySample {
   watts: number;
   targetWatts: number;
   speedKmh: number;
-  targetSpeedKmh: number;
   gradePercent: number;
   cadenceRpm: number;
 }
@@ -91,6 +88,8 @@ export interface TelemetrySample {
 export interface WorkoutSegment {
   startMeters: number;
   endMeters: number;
+  startSec?: number;
+  endSec?: number;
   targetWatts: number;
   label?: string;
 }
@@ -99,8 +98,115 @@ export interface DistanceWorkout {
   id: string;
   name: string;
   fileName: string;
-  unitDetected: 'km' | 'm';
+  unitDetected: 'km' | 'm' | 'sec';
+  basis?: 'distance' | 'time';
+  source?: 'file' | 'intervals';
+  ftp?: number;
   segments: WorkoutSegment[];
   totalDistanceMeters: number;
+  totalDurationSec?: number;
 }
+
+export interface RecordedTrackPoint {
+  timestampMs: number;
+  elapsedSec: number;
+  distanceMeters: number;
+  lat: number;
+  lon: number;
+  elevationMeters: number;
+  watts: number;
+  cadenceRpm: number;
+  speedKmh: number;
+  gradePercent: number;
+  virtualGear: number;
+}
+
+export interface RideSummary {
+  courseName: string;
+  startTimeMs: number;
+  endTimeMs: number;
+  elapsedSec: number;
+  totalDistanceMeters: number;
+  elevationGainMeters: number;
+  avgWatts: number;
+  maxWatts: number;
+  avgSpeedKmh: number;
+  maxSpeedKmh: number;
+  avgCadenceRpm: number;
+  totalWorkKj: number;
+  pointCount: number;
+}
+
+export interface StravaAthlete {
+  id: number;
+  firstname: string;
+  lastname: string;
+  username?: string;
+  profile?: string;
+}
+
+export interface StravaStatus {
+  configured: boolean;
+  connected: boolean;
+  athlete: StravaAthlete | null;
+  callbackUrl?: string;
+}
+
+export interface IntervalsAthlete {
+  id: string;
+  name: string;
+  ftp?: number;
+}
+
+export interface IntervalsStatus {
+  configured: boolean;
+  oauthConfigured?: boolean;
+  authMode: 'oauth' | 'apikey' | 'none';
+  connected: boolean;
+  athlete: IntervalsAthlete | null;
+  callbackUrl?: string;
+}
+
+export interface IntervalsRawStep {
+  duration?: number;
+  distance?: number;
+  reps?: number;
+  text?: string;
+  ramp?: boolean;
+  power?: {
+    value?: number;
+    start?: number;
+    end?: number;
+    units?: string;
+  };
+  _power?: {
+    value?: number;
+    start?: number;
+    end?: number;
+  };
+  steps?: IntervalsRawStep[];
+}
+
+export interface IntervalsWorkoutDoc {
+  description?: string;
+  duration?: number;
+  distance?: number;
+  ftp?: number;
+  steps?: IntervalsRawStep[];
+}
+
+export interface IntervalsRemoteWorkout {
+  id: string | number;
+  name: string;
+  startDateLocal?: string;
+  category?: string;
+  sourceKind: 'calendar' | 'library';
+  description?: string;
+  durationSec: number;
+  distanceMeters: number;
+  ftp?: number;
+  workoutDoc?: IntervalsWorkoutDoc;
+}
+
+
 

@@ -22,7 +22,6 @@ interface RideStageProps {
   watts: number;
   targetWatts: number;
   speedKmh: number;
-  targetSpeedKmh: number;
   cadenceRpm: number;
   gradePercent: number;
   distanceMeters: number;
@@ -57,7 +56,6 @@ export function RideStage({
   watts,
   targetWatts,
   speedKmh,
-  targetSpeedKmh,
   cadenceRpm,
   gradePercent,
   distanceMeters,
@@ -392,7 +390,7 @@ export function RideStage({
         {/* Power */}
         <div className="px-4 py-3">
           <div className="text-[11px] font-medium tracking-wider uppercase text-slate-400">
-            Power
+            3s Avg Power
           </div>
           <div className="mt-1 flex items-baseline">
             <span className="font-mono text-2xl font-bold text-slate-100">{watts}</span>
@@ -400,7 +398,13 @@ export function RideStage({
           </div>
           <div className="mt-0.5 font-mono text-xs text-slate-400 truncate">
             {workoutLookup
-              ? `Target ${targetWatts} W${workoutLookup.nextSegment && workoutLookup.distanceToNextMeters !== null ? ` · Next ${workoutLookup.nextSegment.targetWatts} W (${(workoutLookup.distanceToNextMeters / 1000).toFixed(2)} km)` : ''}`
+              ? `Target ${targetWatts} W${
+                  workoutLookup.nextSegment && workoutLookup.secondsToNext !== null
+                    ? ` · Next ${workoutLookup.nextSegment.targetWatts} W (${Math.floor(workoutLookup.secondsToNext / 60)}:${String(workoutLookup.secondsToNext % 60).padStart(2, '0')})`
+                    : workoutLookup.nextSegment && workoutLookup.distanceToNextMeters !== null
+                    ? ` · Next ${workoutLookup.nextSegment.targetWatts} W (${(workoutLookup.distanceToNextMeters / 1000).toFixed(2)} km)`
+                    : ''
+                }`
               : `Target ${targetWatts} W`}
           </div>
         </div>
@@ -417,7 +421,7 @@ export function RideStage({
             <span className="ml-1.5 font-mono text-xs text-slate-400">km/h</span>
           </div>
           <div className="mt-0.5 font-mono text-xs text-slate-400">
-            Target {targetSpeedKmh.toFixed(1)} km/h
+            GPX road physics
           </div>
         </div>
 

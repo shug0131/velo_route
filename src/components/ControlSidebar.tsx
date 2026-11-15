@@ -1,4 +1,6 @@
 import {
+  Bell,
+  BellOff,
   Bluetooth,
   ChevronDown,
   ChevronUp,
@@ -6,13 +8,15 @@ import {
   Plus,
   RotateCcw,
   Upload,
+  UploadCloud,
   Volume2,
   VolumeX,
 } from 'lucide-react';
 import {
-  CoachingMode,
   DistanceWorkout,
+  IntervalsStatus,
   KickrTelemetry,
+  StravaStatus,
   TrainerMode,
   VirtualGearSpec,
   ZwiftClickTelemetry,
@@ -33,21 +37,24 @@ interface ControlSidebarProps {
   onShiftGear: (delta: number) => void;
   trainerMode: TrainerMode;
   onChangeTrainerMode: (mode: TrainerMode) => void;
-  coachingMode: CoachingMode;
-  onChangeCoachingMode: (mode: CoachingMode) => void;
   targetWatts: number;
   onChangeTargetWatts: (watts: number) => void;
   activeWorkout: DistanceWorkout | null;
   workoutModeEnabled: boolean;
   onToggleWorkoutMode: (enabled: boolean) => void;
   workoutLookup: WorkoutTargetLookup | null;
-  targetSpeedKmh: number;
-  onChangeTargetSpeed: (kmh: number) => void;
   audioCueEnabled: boolean;
   onToggleAudioCue: () => void;
+  intervalBeepEnabled: boolean;
+  onToggleIntervalBeep: () => void;
   onResetRide: () => void;
   onOpenCourseUpload: () => void;
-  requiredWattsForTargetSpeed: number;
+  recordedPointCount: number;
+  onOpenExportModal: () => void;
+  stravaStatus: StravaStatus;
+  onOpenStravaModal: () => void;
+  intervalsStatus: IntervalsStatus;
+  onOpenIntervalsModal: () => void;
 }
 
 export function ControlSidebar({
@@ -64,21 +71,24 @@ export function ControlSidebar({
   onShiftGear,
   trainerMode,
   onChangeTrainerMode,
-  coachingMode,
-  onChangeCoachingMode,
   targetWatts,
   onChangeTargetWatts,
   activeWorkout,
   workoutModeEnabled,
   onToggleWorkoutMode,
   workoutLookup,
-  targetSpeedKmh,
-  onChangeTargetSpeed,
   audioCueEnabled,
   onToggleAudioCue,
+  intervalBeepEnabled,
+  onToggleIntervalBeep,
   onResetRide,
   onOpenCourseUpload,
-  requiredWattsForTargetSpeed,
+  recordedPointCount,
+  onOpenExportModal,
+  stravaStatus,
+  onOpenStravaModal,
+  intervalsStatus,
+  onOpenIntervalsModal,
 }: ControlSidebarProps) {
   const isWorkoutActive = Boolean(activeWorkout && workoutModeEnabled && workoutLookup);
 
@@ -295,7 +305,29 @@ export function ControlSidebar({
           <h2 className="font-display text-sm font-semibold text-slate-100">
             Target & Resistance
           </h2>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={onToggleIntervalBeep}
+              aria-pressed={intervalBeepEnabled}
+              title={
+                intervalBeepEnabled
+                  ? 'Disable 5s pre-interval countdown beeps'
+                  : 'Enable 5s pre-interval countdown beeps'
+              }
+              className={`inline-flex items-center gap-1 px-2 py-1 rounded border text-[11px] font-medium transition-colors whitespace-nowrap ${
+                intervalBeepEnabled
+                  ? 'border-cyan-500/40 bg-cyan-500/15 text-cyan-300'
+                  : 'border-[#1C2333] text-slate-400 hover:text-slate-100 hover:border-slate-600'
+              }`}
+            >
+              {intervalBeepEnabled ? (
+                <Bell className="w-3 h-3" />
+              ) : (
+                <BellOff className="w-3 h-3" />
+              )}
+              <span>5s Beeps: {intervalBeepEnabled ? 'On' : 'Off'}</span>
+            </button>
             <button
               type="button"
               onClick={onToggleAudioCue}
@@ -316,33 +348,6 @@ export function ControlSidebar({
             >
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
-          </div>
-        </div>
-
-        {/* Coaching Metric Selector */}
-        <div className="space-y-1.5">
-          <span className="text-xs text-slate-400">Coaching Cue Metric</span>
-          <div className="grid grid-cols-3 gap-1 p-1 rounded-md bg-[#111622] border border-[#1C2333]">
-            {(
-              [
-                { id: 'watts', label: 'Watts' },
-                { id: 'speed', label: 'Speed' },
-                { id: 'both', label: 'Both' },
-              ] as const
-            ).map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => onChangeCoachingMode(opt.id)}
-                className={`py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap ${
-                  coachingMode === opt.id
-                    ? 'bg-cyan-500 text-slate-950 font-semibold'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
           </div>
         </div>
 
@@ -398,7 +403,13 @@ export function ControlSidebar({
               </div>
               <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
                 <span className="truncate">{activeWorkout.name}</span>
-                {workoutLookup.nextSegment && workoutLookup.distanceToNextMeters !== null ? (
+                {workoutLookup.nextSegment && workoutLookup.secondsToNext !== null ? (
+                  <span className="text-slate-300 shrink-0 ml-2">
+                    Next {workoutLookup.nextSegment.targetWatts} W in{' '}
+                    {Math.floor(workoutLookup.secondsToNext / 60)}:
+                    {String(workoutLookup.secondsToNext % 60).padStart(2, '0')}
+                  </span>
+                ) : workoutLookup.nextSegment && workoutLookup.distanceToNextMeters !== null ? (
                   <span className="text-slate-300 shrink-0 ml-2">
                     Next {workoutLookup.nextSegment.targetWatts} W in{' '}
                     {(workoutLookup.distanceToNextMeters / 1000).toFixed(2)} km
@@ -450,53 +461,6 @@ export function ControlSidebar({
           )}
         </div>
 
-        {/* Target Speed Control */}
-        <div className="space-y-2 pt-2 border-t border-[#1C2333]">
-          <div className="flex items-center justify-between">
-            <label htmlFor="target-speed-range" className="text-xs font-medium text-slate-300">
-              Target Speed
-            </label>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() =>
-                  onChangeTargetSpeed(Math.max(8, Number((targetSpeedKmh - 1).toFixed(1))))
-                }
-                aria-label="Decrease target speed by 1 km/h"
-                className="w-7 h-7 inline-flex items-center justify-center rounded border border-[#1C2333] bg-[#111622] hover:bg-slate-800 text-slate-300"
-              >
-                <Minus className="w-3 h-3" />
-              </button>
-              <span className="font-mono text-sm font-bold text-slate-100 w-20 text-center">
-                {targetSpeedKmh.toFixed(1)} km/h
-              </span>
-              <button
-                type="button"
-                onClick={() =>
-                  onChangeTargetSpeed(Math.min(65, Number((targetSpeedKmh + 1).toFixed(1))))
-                }
-                aria-label="Increase target speed by 1 km/h"
-                className="w-7 h-7 inline-flex items-center justify-center rounded border border-[#1C2333] bg-[#111622] hover:bg-slate-800 text-slate-300"
-              >
-                <Plus className="w-3 h-3" />
-              </button>
-            </div>
-          </div>
-          <input
-            id="target-speed-range"
-            type="range"
-            min={8}
-            max={60}
-            step={0.5}
-            value={targetSpeedKmh}
-            onChange={(e) => onChangeTargetSpeed(Number(e.target.value))}
-            className="w-full h-1.5 accent-cyan-400 bg-slate-800 rounded cursor-pointer"
-          />
-          <p className="text-[11px] font-mono text-slate-400">
-            At current grade: {targetSpeedKmh.toFixed(1)} km/h ≈ {requiredWattsForTargetSpeed} W
-          </p>
-        </div>
-
         {/* KICKR Resistance Mode */}
         <div className="space-y-1.5 pt-2 border-t border-[#1C2333]">
           <span className="text-xs text-slate-400">KICKR Resistance Mode</span>
@@ -522,6 +486,48 @@ export function ControlSidebar({
               }`}
             >
               ERG ({isWorkoutActive && workoutLookup ? workoutLookup.targetWatts : targetWatts} W)
+            </button>
+          </div>
+        </div>
+
+        <div className="pt-2 border-t border-[#1C2333] space-y-2">
+          <button
+            type="button"
+            disabled={recordedPointCount < 2}
+            onClick={onOpenExportModal}
+            className="w-full inline-flex items-center justify-center gap-2 py-2 px-3 rounded-md border border-slate-700 bg-[#111622] hover:border-cyan-500/60 hover:text-cyan-300 disabled:opacity-40 text-xs font-semibold text-slate-200 transition-colors"
+          >
+            <UploadCloud className="w-3.5 h-3.5 text-cyan-400" />
+            Finish & Export / Strava ({recordedPointCount}s)
+          </button>
+
+          <div className="flex items-center justify-between text-[11px] pt-1">
+            <span className="text-slate-400">
+              {stravaStatus.connected && stravaStatus.athlete
+                ? `Strava: ${stravaStatus.athlete.firstname} ${stravaStatus.athlete.lastname}`
+                : 'Strava Account'}
+            </span>
+            <button
+              type="button"
+              onClick={onOpenStravaModal}
+              className="font-semibold text-[#FC4C02] hover:text-[#ff6d30] transition-colors"
+            >
+              {stravaStatus.connected ? 'Manage' : 'Connect via Browser'}
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="text-slate-400 truncate pr-2">
+              {intervalsStatus.connected && intervalsStatus.athlete
+                ? `Intervals.icu: ${intervalsStatus.athlete.name}`
+                : 'Intervals.icu'}
+            </span>
+            <button
+              type="button"
+              onClick={onOpenIntervalsModal}
+              className="font-semibold text-cyan-400 hover:text-cyan-300 transition-colors shrink-0"
+            >
+              {intervalsStatus.connected ? 'Manage' : 'Connect via Browser'}
             </button>
           </div>
         </div>

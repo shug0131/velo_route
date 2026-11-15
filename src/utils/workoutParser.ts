@@ -1,4 +1,9 @@
-import { DistanceWorkout, WorkoutSegment } from '../types/simulator';
+import {
+  DistanceWorkout,
+  IntervalsRawStep,
+  IntervalsRemoteWorkout,
+  WorkoutSegment,
+} from '../types/simulator';
 
 export type DistanceUnitMode = 'auto' | 'km' | 'm';
 
@@ -280,20 +285,59 @@ export interface WorkoutTargetLookup {
   segment: WorkoutSegment;
   nextSegment: WorkoutSegment | null;
   distanceToNextMeters: number | null;
+  secondsToNext: number | null;
 }
 
 export function getWorkoutTargetAtDistance(
   workout: DistanceWorkout,
   distanceMeters: number
 ): WorkoutTargetLookup {
+  return getWorkoutTargetAtState(workout, distanceMeters, 0);
+}
+
+export function getWorkoutTargetAtState(
+  workout: DistanceWorkout,
+  distanceMeters: number,
+  elapsedSec: number
+): WorkoutTargetLookup {
   const segs = workout.segments;
   if (segs.length === 0) {
     return {
       targetWatts: 200,
       segmentIndex: 0,
-      segment: { startMeters: 0, endMeters: 1000, targetWatts: 200 },
+      segment: { startMeters: 0, endMeters: 1000, startSec: 0, endSec: 60, targetWatts: 200 },
       nextSegment: null,
       distanceToNextMeters: null,
+      secondsToNext: null,
+    };
+  }
+
+  if (workout.basis === 'time') {
+    const t = Math.max(0, elapsedSec);
+    for (let i = 0; i < segs.length; i++) {
+      const seg = segs[i];
+      const s0 = seg.startSec ?? 0;
+      const s1 = seg.endSec ?? s0 + 60;
+      if (t >= s0 && t < s1) {
+        const nextSegment = i < segs.length - 1 ? segs[i + 1] : null;
+        return {
+          targetWatts: seg.targetWatts,
+          segmentIndex: i,
+          segment: seg,
+          nextSegment,
+          distanceToNextMeters: null,
+          secondsToNext: nextSegment ? Math.max(0, Math.round(s1 - t)) : null,
+        };
+      }
+    }
+    const last = segs[segs.length - 1];
+    return {
+      targetWatts: last.targetWatts,
+      segmentIndex: segs.length - 1,
+      segment: last,
+      nextSegment: null,
+      distanceToNextMeters: null,
+      secondsToNext: null,
     };
   }
 
@@ -304,6 +348,7 @@ export function getWorkoutTargetAtDistance(
       segment: segs[0],
       nextSegment: segs.length > 1 ? segs[1] : null,
       distanceToNextMeters: segs[0].endMeters - distanceMeters,
+      secondsToNext: null,
     };
   }
 
@@ -317,6 +362,7 @@ export function getWorkoutTargetAtDistance(
         segment: seg,
         nextSegment,
         distanceToNextMeters: nextSegment ? Math.max(0, seg.endMeters - distanceMeters) : null,
+        secondsToNext: null,
       };
     }
   }
@@ -328,6 +374,205 @@ export function getWorkoutTargetAtDistance(
     segment: last,
     nextSegment: null,
     distanceToNextMeters: null,
+    secondsToNext: null,
+  };
+}
+
+function resolveStepWatts(step: IntervalsRawStep, ftp: number): number {
+  if (step._power) {
+    if (
+      typeof step._power.start === 'number' &&
+      typeof step._power.end === 'number'
+    ) {
+      return Math.round((step._power.start + step._power.end) / 2);
+    }
+    if (typeof step._power.value === 'number') {
+      return Math.round(step._power.value);
+    }
+  }
+  if (step.power) {
+    const units = (step.power.units || '').toLowerCase();
+    const rawVal =
+      typeof step.power.start === 'number' && typeof step.power.end === 'number'
+        ? (step.power.start + step.power.end) / 2
+        : typeof step.power.value === 'number'
+        ? step.power.value
+        : 65;
+
+    if (units.includes('ftp') || units.includes('%')) {
+      return Math.round((rawVal / 100) * ftp);
+    }
+    if (units === 'w' || units === 'watts') {
+      return Math.round(rawVal);
+    }
+    return rawVal <= 200 ? Math.round((rawVal / 100) * ftp) : Math.round(rawVal);
+  }
+  return Math.round(ftp * 0.65);
+}
+
+function flattenIntervalsSteps(
+  steps: IntervalsRawStep[],
+  ftp: number
+): Array<{ durationSec: number; distanceMeters: number; watts: number; label?: string }> {
+  const flat: Array<{ durationSec: number; distanceMeters: number; watts: number; label?: string }> = [];
+
+  for (const step of steps) {
+    if (Array.isArray(step.steps) && step.steps.length > 0) {
+      const reps = Math.max(1, Math.round(step.reps ?? 1));
+      for (let r = 0; r < reps; r++) {
+        flat.push(...flattenIntervalsSteps(step.steps, ftp));
+      }
+      continue;
+    }
+
+    const durationSec = Math.max(0, Number(step.duration ?? 0));
+    const distanceMeters = Math.max(0, Number(step.distance ?? 0));
+    if (durationSec <= 0 && distanceMeters <= 0) continue;
+
+    // Expand ramps into 4 smooth sub-steps if start and end differ meaningfully
+    const startW = step._power?.start ?? step.power?.start;
+    const endW = step._power?.end ?? step.power?.end;
+    const isRamp =
+      Boolean(step.ramp) &&
+      typeof startW === 'number' &&
+      typeof endW === 'number' &&
+      Math.abs(endW - startW) > 12;
+
+    if (isRamp) {
+      const units = (step.power?.units || '').toLowerCase();
+      const toWatts = (v: number) =>
+        step._power
+          ? Math.round(v)
+          : units.includes('ftp') || units.includes('%') || v <= 200
+          ? Math.round((v / 100) * ftp)
+          : Math.round(v);
+      const w0 = toWatts(startW!);
+      const w1 = toWatts(endW!);
+      const chunks = 4;
+      for (let c = 0; c < chunks; c++) {
+        const frac = (c + 0.5) / chunks;
+        flat.push({
+          durationSec: durationSec / chunks,
+          distanceMeters: distanceMeters / chunks,
+          watts: Math.max(40, Math.round(w0 + frac * (w1 - w0))),
+          label: step.text || 'Ramp',
+        });
+      }
+    } else {
+      flat.push({
+        durationSec,
+        distanceMeters,
+        watts: Math.max(40, Math.min(1500, resolveStepWatts(step, ftp))),
+        label: step.text || undefined,
+      });
+    }
+  }
+
+  return flat;
+}
+
+export function convertIntervalsWorkoutToStructured(
+  remote: IntervalsRemoteWorkout,
+  fallbackFtp = 250
+): DistanceWorkout {
+  const ftp = remote.workoutDoc?.ftp || remote.ftp || fallbackFtp;
+  const rawSteps = remote.workoutDoc?.steps || [];
+  const flattened = flattenIntervalsSteps(rawSteps, ftp);
+
+  if (flattened.length === 0) {
+    const dur = Math.max(600, remote.durationSec || 1800);
+    return {
+      id: `icu-${remote.id}`,
+      name: remote.name,
+      fileName: `intervals-${remote.id}.json`,
+      unitDetected: 'sec',
+      basis: 'time',
+      source: 'intervals',
+      ftp,
+      segments: [
+        {
+          startMeters: 0,
+          endMeters: Math.max(1000, remote.distanceMeters || 15000),
+          startSec: 0,
+          endSec: dur,
+          targetWatts: Math.round(ftp * 0.7),
+          label: remote.name,
+        },
+      ],
+      totalDistanceMeters: Math.max(1000, remote.distanceMeters || 15000),
+      totalDurationSec: dur,
+    };
+  }
+
+  const distanceStepCount = flattened.filter((s) => s.distanceMeters > 0).length;
+  const hasDistanceSteps =
+    distanceStepCount > 0 &&
+    (distanceStepCount === flattened.length || distanceStepCount >= flattened.length / 2);
+
+  if (hasDistanceSteps) {
+    let cursorM = 0;
+    const nominalMetersPerSec = 8.33; // fallback only for any mixed time-only step inside a distance workout
+    const segments: WorkoutSegment[] = flattened.map((s, idx) => {
+      const startMeters = cursorM;
+      const stepDist =
+        s.distanceMeters > 0
+          ? s.distanceMeters
+          : Math.max(50, Math.round(s.durationSec * nominalMetersPerSec));
+      const endMeters = startMeters + stepDist;
+      cursorM = endMeters;
+      return {
+        startMeters,
+        endMeters,
+        targetWatts: s.watts,
+        label: s.label || `Interval ${idx + 1}`,
+      };
+    });
+    return {
+      id: `icu-${remote.id}`,
+      name: remote.name,
+      fileName: `intervals-${remote.id}.json`,
+      unitDetected: 'km',
+      basis: 'distance',
+      source: 'intervals',
+      ftp,
+      segments,
+      totalDistanceMeters: cursorM,
+    };
+  }
+
+  let cursorSec = 0;
+  let cursorMeters = 0;
+  const nominalMetersPerSec = 8.33; // ~30 km/h nominal preview mapping
+  const segments: WorkoutSegment[] = flattened.map((s, idx) => {
+    const dur = Math.max(5, s.durationSec || 60);
+    const dist = s.distanceMeters > 0 ? s.distanceMeters : dur * nominalMetersPerSec;
+    const startSec = cursorSec;
+    const endSec = startSec + dur;
+    const startMeters = cursorMeters;
+    const endMeters = startMeters + dist;
+    cursorSec = endSec;
+    cursorMeters = endMeters;
+    return {
+      startMeters,
+      endMeters,
+      startSec,
+      endSec,
+      targetWatts: s.watts,
+      label: s.label || `Block ${idx + 1}`,
+    };
+  });
+
+  return {
+    id: `icu-${remote.id}`,
+    name: remote.name,
+    fileName: `intervals-${remote.id}.json`,
+    unitDetected: 'sec',
+    basis: 'time',
+    source: 'intervals',
+    ftp,
+    segments,
+    totalDistanceMeters: cursorMeters,
+    totalDurationSec: cursorSec,
   };
 }
 

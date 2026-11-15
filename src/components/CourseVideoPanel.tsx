@@ -1,7 +1,20 @@
 import { useRef, useState } from 'react';
-import { Check, Download, FileCode, MapPin, Trash2, Upload, Video, Zap } from 'lucide-react';
-import { DistanceWorkout, GpxCourse, RiderConfig } from '../types/simulator';
+import { Calendar, Check, Download, FileCode, Loader2, MapPin, RefreshCw, Trash2, Upload, Video, Zap } from 'lucide-react';
+import {
+  DistanceWorkout,
+  GpxCourse,
+  IntervalsRemoteWorkout,
+  IntervalsStatus,
+  RiderConfig,
+} from '../types/simulator';
 import { DistanceUnitMode, SAMPLE_WORKOUT_CSV } from '../utils/workoutParser';
+
+function formatSecs(sec: number): string {
+  const s = Math.max(0, Math.round(sec));
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${String(m).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+}
 
 interface CourseVideoPanelProps {
   courses: GpxCourse[];
@@ -19,6 +32,14 @@ interface CourseVideoPanelProps {
   onUploadWorkoutFile: (file: File) => Promise<void>;
   onLoadSampleWorkout: () => void;
   onClearWorkout: () => void;
+  intervalsStatus: IntervalsStatus;
+  intervalsWorkouts: IntervalsRemoteWorkout[];
+  intervalsSyncing: boolean;
+  intervalsError: string | null;
+  onConnectIntervals: () => void;
+  onDisconnectIntervals: () => void;
+  onSyncIntervals: () => void;
+  onSelectIntervalsWorkout: (workout: IntervalsRemoteWorkout) => void;
   riderConfig: RiderConfig;
   onUpdateRiderConfig: (patch: Partial<RiderConfig>) => void;
   videoPlaybackRate: number;
@@ -41,6 +62,14 @@ export function CourseVideoPanel({
   onUploadWorkoutFile,
   onLoadSampleWorkout,
   onClearWorkout,
+  intervalsStatus,
+  intervalsWorkouts,
+  intervalsSyncing,
+  intervalsError,
+  onConnectIntervals,
+  onDisconnectIntervals,
+  onSyncIntervals,
+  onSelectIntervalsWorkout,
   riderConfig,
   onUpdateRiderConfig,
   videoPlaybackRate,
@@ -349,12 +378,14 @@ export function CourseVideoPanel({
           <div className="pt-3 border-t border-[#1C2333] space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
               <div className="text-slate-300">
-                Loaded: <span className="font-mono text-emerald-300">{activeWorkout.fileName}</span>
+                Loaded: <span className="font-mono text-emerald-300">{activeWorkout.name}</span>
                 <span aria-hidden="true" className="mx-2 text-slate-600">·</span>
-                <span>{activeWorkout.segments.length} distance blocks</span>
+                <span>{activeWorkout.segments.length} blocks</span>
                 <span aria-hidden="true" className="mx-2 text-slate-600">·</span>
                 <span className="font-mono">
-                  Covers {(activeWorkout.totalDistanceMeters / 1000).toFixed(2)} km (parsed as {activeWorkout.unitDetected})
+                  {activeWorkout.basis === 'time' && activeWorkout.totalDurationSec
+                    ? `${Math.round(activeWorkout.totalDurationSec / 60)} min duration`
+                    : `${(activeWorkout.totalDistanceMeters / 1000).toFixed(2)} km (${activeWorkout.unitDetected})`}
                 </span>
               </div>
               <span className="font-mono text-xs text-slate-400">
@@ -367,7 +398,9 @@ export function CourseVideoPanel({
               <table className="w-full text-left text-xs">
                 <thead className="bg-[#111622] text-slate-400 sticky top-0">
                   <tr>
-                    <th className="py-2 px-3 font-medium">Distance Range</th>
+                    <th className="py-2 px-3 font-medium">
+                      {activeWorkout.basis === 'time' ? 'Time Range' : 'Distance Range'}
+                    </th>
                     <th className="py-2 px-3 font-medium">Segment</th>
                     <th className="py-2 px-3 font-medium text-right">Target Watts</th>
                   </tr>
@@ -376,7 +409,9 @@ export function CourseVideoPanel({
                   {activeWorkout.segments.map((seg, idx) => (
                     <tr key={`${seg.startMeters}-${idx}`} className="text-slate-200">
                       <td className="py-1.5 px-3">
-                        {(seg.startMeters / 1000).toFixed(2)} – {(seg.endMeters / 1000).toFixed(2)} km
+                        {activeWorkout.basis === 'time' && seg.startSec !== undefined && seg.endSec !== undefined
+                          ? `${formatSecs(seg.startSec)} – ${formatSecs(seg.endSec)}`
+                          : `${(seg.startMeters / 1000).toFixed(2)} – ${(seg.endMeters / 1000).toFixed(2)} km`}
                       </td>
                       <td className="py-1.5 px-3 font-sans text-slate-400">
                         {seg.label || `Block ${idx + 1}`}
@@ -389,6 +424,133 @@ export function CourseVideoPanel({
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* Intervals.icu Calendar & Library Sync */}
+      <div className="border border-[#1C2333] bg-[#0B0E17] rounded-lg p-6 space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-md bg-[#111622] border border-[#1C2333] flex items-center justify-center shrink-0">
+              <Calendar className="w-5 h-5 text-cyan-400" />
+            </div>
+            <div>
+              <h2 className="font-display text-base font-semibold text-slate-100">
+                Intervals.icu Workout Sync
+              </h2>
+              <p className="text-xs text-slate-400">
+                {intervalsStatus.connected && intervalsStatus.athlete
+                  ? `Connected as ${intervalsStatus.athlete.name}${intervalsStatus.athlete.ftp ? ` · FTP ${intervalsStatus.athlete.ftp} W` : ''}`
+                  : 'Sync planned calendar workouts and your workout library from Intervals.icu.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {intervalsStatus.connected ? (
+              <>
+                <button
+                  type="button"
+                  disabled={intervalsSyncing}
+                  onClick={onSyncIntervals}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-cyan-500/15 border border-cyan-500/40 hover:bg-cyan-500/25 disabled:opacity-50 text-xs font-semibold text-cyan-300 transition-colors whitespace-nowrap"
+                >
+                  {intervalsSyncing ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  )}
+                  {intervalsSyncing ? 'Syncing...' : 'Sync Workouts'}
+                </button>
+                {intervalsStatus.authMode === 'oauth' ? (
+                  <button
+                    type="button"
+                    onClick={onDisconnectIntervals}
+                    className="px-3 py-2 rounded-md border border-slate-700 text-xs font-medium text-slate-300 hover:bg-slate-800 whitespace-nowrap"
+                  >
+                    Disconnect
+                  </button>
+                ) : intervalsStatus.oauthConfigured ? (
+                  <button
+                    type="button"
+                    onClick={onConnectIntervals}
+                    className="px-3 py-2 rounded-md border border-slate-700 text-xs font-medium text-slate-200 hover:border-cyan-500/50 hover:text-cyan-300 whitespace-nowrap"
+                  >
+                    Browser Login
+                  </button>
+                ) : null}
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={onConnectIntervals}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-cyan-500 text-slate-950 hover:bg-cyan-400 text-xs font-semibold transition-colors whitespace-nowrap"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Connect Intervals.icu
+              </button>
+            )}
+          </div>
+        </div>
+
+        {!intervalsStatus.configured && !intervalsStatus.connected && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200">
+            Configure <span className="font-mono">INTERVALS_CLIENT_ID</span> & <span className="font-mono">INTERVALS_CLIENT_SECRET</span> (or <span className="font-mono">INTERVALS_API_KEY</span>) in AI Studio Secrets, or click Connect Intervals.icu to view setup callback details.
+          </div>
+        )}
+
+        {intervalsError && <p className="text-xs text-rose-400">{intervalsError}</p>}
+
+        {intervalsStatus.connected && (
+          <div className="pt-3 border-t border-[#1C2333]">
+            {intervalsWorkouts.length === 0 ? (
+              <p className="text-xs text-slate-400">
+                {intervalsSyncing
+                  ? 'Loading calendar and library workouts...'
+                  : 'No planned workouts loaded yet. Click Sync Workouts to pull your Intervals.icu calendar and library.'}
+              </p>
+            ) : (
+              <div className="divide-y divide-[#1C2333] max-h-64 overflow-y-auto">
+                {intervalsWorkouts.map((w) => {
+                  const isActive = activeWorkout?.id === `icu-${w.id}`;
+                  return (
+                    <div
+                      key={`${w.sourceKind}-${w.id}`}
+                      className="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-slate-100 truncate">
+                          {w.name}
+                        </div>
+                        <div className="text-xs font-mono text-slate-400">
+                          {w.sourceKind === 'calendar' && w.startDateLocal
+                            ? `${w.startDateLocal.slice(0, 10)} · Calendar`
+                            : 'Workout Library'}
+                          {w.distanceMeters > 0
+                            ? ` · ${(w.distanceMeters / 1000).toFixed(2)} km (Distance)`
+                            : w.durationSec > 0
+                            ? ` · ${Math.round(w.durationSec / 60)} min (Time)`
+                            : ''}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onSelectIntervalsWorkout(w)}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap shrink-0 self-start sm:self-center ${
+                          isActive
+                            ? 'bg-emerald-500/15 border border-emerald-500/40 text-emerald-300'
+                            : 'bg-[#111622] border border-slate-700 text-slate-200 hover:border-cyan-500/50'
+                        }`}
+                      >
+                        {isActive && <Check className="w-3.5 h-3.5" />}
+                        {isActive ? 'Active Workout' : 'Load Workout'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>

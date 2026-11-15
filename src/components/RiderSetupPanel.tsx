@@ -5,8 +5,6 @@ interface RiderSetupPanelProps {
   onUpdateRiderConfig: (patch: Partial<RiderConfig>) => void;
   wattTolerance: number;
   onChangeWattTolerance: (val: number) => void;
-  speedToleranceKmh: number;
-  onChangeSpeedTolerance: (val: number) => void;
   onBackToCockpit: () => void;
 }
 
@@ -15,8 +13,6 @@ export function RiderSetupPanel({
   onUpdateRiderConfig,
   wattTolerance,
   onChangeWattTolerance,
-  speedToleranceKmh,
-  onChangeSpeedTolerance,
   onBackToCockpit,
 }: RiderSetupPanelProps) {
   return (
@@ -130,10 +126,10 @@ export function RiderSetupPanel({
         {/* Target Zone Coaching Thresholds */}
         <div className="border border-[#1C2333] bg-[#0B0E17] rounded-lg p-6 space-y-5">
           <h2 className="font-display text-base font-semibold text-slate-100">
-            Coaching Cue Tolerances
+            Coaching Cue Tolerance
           </h2>
           <p className="text-xs text-slate-400">
-            Adjust how tight your power and speed target bands are before VeloRoute prompts you to push harder or go easier.
+            Adjust how tight your 3-second average power target band is before VeloRoute prompts you to push harder or go easier.
           </p>
 
           <div className="space-y-2">
@@ -151,25 +147,6 @@ export function RiderSetupPanel({
               step={1}
               value={wattTolerance}
               onChange={(e) => onChangeWattTolerance(Number(e.target.value))}
-              className="w-full h-1.5 accent-emerald-400 bg-slate-800 rounded cursor-pointer"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex justify-between text-xs">
-              <label htmlFor="speed-tol" className="text-slate-300">
-                Speed Target Tolerance
-              </label>
-              <span className="font-mono text-emerald-400">±{speedToleranceKmh.toFixed(1)} km/h</span>
-            </div>
-            <input
-              id="speed-tol"
-              type="range"
-              min={0.3}
-              max={5.0}
-              step={0.1}
-              value={speedToleranceKmh}
-              onChange={(e) => onChangeSpeedTolerance(Number(e.target.value))}
               className="w-full h-1.5 accent-emerald-400 bg-slate-800 rounded cursor-pointer"
             />
           </div>

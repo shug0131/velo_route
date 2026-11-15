@@ -76,34 +76,74 @@ export function parseGpxString(xmlText: string, fileName: string): GpxCourse {
     distances.push(distances[i - 1] + d);
   }
 
-  // Smooth elevation using a ±35m distance window to remove GPS altimeter noise
+  // Pass 1: Distance-weighted triangular elevation smoothing (±65m window) to remove GPS altimeter steps
+  const eleRadiusM = 65;
   const smoothedEles: number[] = raw.map((_, idx) => {
     const centerDist = distances[idx];
-    let sum = 0;
-    let count = 0;
-    for (let j = idx; j >= 0 && centerDist - distances[j] <= 35; j--) {
-      sum += raw[j].ele;
-      count++;
+    let weightedSum = 0;
+    let weightTotal = 0;
+    for (let j = idx; j >= 0; j--) {
+      const d = centerDist - distances[j];
+      if (d > eleRadiusM) break;
+      const w = 1 - d / (eleRadiusM + 5);
+      weightedSum += raw[j].ele * w;
+      weightTotal += w;
     }
-    for (let j = idx + 1; j < raw.length && distances[j] - centerDist <= 35; j++) {
-      sum += raw[j].ele;
-      count++;
+    for (let j = idx + 1; j < raw.length; j++) {
+      const d = distances[j] - centerDist;
+      if (d > eleRadiusM) break;
+      const w = 1 - d / (eleRadiusM + 5);
+      weightedSum += raw[j].ele * w;
+      weightTotal += w;
     }
-    return count > 0 ? sum / count : raw[idx].ele;
+    return weightTotal > 0 ? weightedSum / weightTotal : raw[idx].ele;
   });
 
-  // Compute segment grade (%) using lookahead/lookbehind window (~40m)
+  // Pass 2: Compute local slope across a ~90m (±45m) baseline on smoothed elevation
+  const rawGrades: number[] = raw.map((_, i) => {
+    const dist = distances[i];
+    let backIdx = i;
+    while (backIdx > 0 && dist - distances[backIdx] < 45) backIdx--;
+    let fwdIdx = i;
+    while (fwdIdx < raw.length - 1 && distances[fwdIdx] - dist < 45) fwdIdx++;
+
+    const spanDist = distances[fwdIdx] - distances[backIdx];
+    const deltaEle = smoothedEles[fwdIdx] - smoothedEles[backIdx];
+    const slope = spanDist > 4 ? (deltaEle / spanDist) * 100 : 0;
+    return Math.max(-22, Math.min(22, slope));
+  });
+
+  // Pass 3: Distance-weighted triangular smoothing on grade (±60m) for steady trainer resistance
+  const gradeRadiusM = 60;
+  const smoothedGrades: number[] = raw.map((_, idx) => {
+    const centerDist = distances[idx];
+    let weightedSum = 0;
+    let weightTotal = 0;
+    for (let j = idx; j >= 0; j--) {
+      const d = centerDist - distances[j];
+      if (d > gradeRadiusM) break;
+      const w = 1 - d / (gradeRadiusM + 5);
+      weightedSum += rawGrades[j] * w;
+      weightTotal += w;
+    }
+    for (let j = idx + 1; j < raw.length; j++) {
+      const d = distances[j] - centerDist;
+      if (d > gradeRadiusM) break;
+      const w = 1 - d / (gradeRadiusM + 5);
+      weightedSum += rawGrades[j] * w;
+      weightTotal += w;
+    }
+    const smoothed = weightTotal > 0 ? weightedSum / weightTotal : rawGrades[idx];
+    return Math.max(-22, Math.min(22, Number(smoothed.toFixed(1))));
+  });
+
   const points: GpxPoint[] = raw.map((pt, i) => {
     const dist = distances[i];
     let backIdx = i;
     while (backIdx > 0 && dist - distances[backIdx] < 20) backIdx--;
     let fwdIdx = i;
     while (fwdIdx < raw.length - 1 && distances[fwdIdx] - dist < 20) fwdIdx++;
-
     const spanDist = distances[fwdIdx] - distances[backIdx];
-    const deltaEle = smoothedEles[fwdIdx] - smoothedEles[backIdx];
-    const rawGrade = spanDist > 2 ? (deltaEle / spanDist) * 100 : 0;
-    const gradePercent = Math.max(-22, Math.min(22, Number(rawGrade.toFixed(1))));
 
     let timeSec: number | null = null;
     let recordedSpeedKmh: number | null = null;
@@ -124,7 +164,7 @@ export function parseGpxString(xmlText: string, fileName: string): GpxCourse {
       ele: pt.ele,
       smoothedEle: smoothedEles[i],
       distanceMeters: dist,
-      gradePercent,
+      gradePercent: smoothedGrades[i],
       timeSec,
       recordedSpeedKmh,
     };
@@ -278,12 +318,19 @@ function buildSampleCourse(
   let minEle = Infinity;
   let maxEle = -Infinity;
 
-  for (let i = 0; i < points.length; i++) {
+  const rawCourseGrades = points.map((_, i) => {
     const prev = points[Math.max(0, i - 1)];
     const next = points[Math.min(points.length - 1, i + 1)];
     const span = next.distanceMeters - prev.distanceMeters;
     const dEle = next.ele - prev.ele;
-    points[i].gradePercent = span > 1 ? Number(Math.max(-18, Math.min(18, (dEle / span) * 100)).toFixed(1)) : 0;
+    return span > 1 ? Math.max(-18, Math.min(18, (dEle / span) * 100)) : 0;
+  });
+
+  for (let i = 0; i < points.length; i++) {
+    const prevG = rawCourseGrades[Math.max(0, i - 1)];
+    const curG = rawCourseGrades[i];
+    const nextG = rawCourseGrades[Math.min(points.length - 1, i + 1)];
+    points[i].gradePercent = Number(((prevG + curG * 2 + nextG) / 4).toFixed(1));
     if (points[i].ele < minEle) minEle = points[i].ele;
     if (points[i].ele > maxEle) maxEle = points[i].ele;
     if (i > 0 && points[i].ele > points[i - 1].ele) {

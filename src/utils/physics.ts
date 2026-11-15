@@ -1,4 +1,4 @@
-import { CoachingMode, CoachingStatus, RiderConfig, VirtualGearSpec } from '../types/simulator';
+import { CoachingStatus, RiderConfig, VirtualGearSpec } from '../types/simulator';
 
 const GRAVITY = 9.80665;
 const AIR_DENSITY = 1.225; // kg/m^3 at sea level
@@ -100,47 +100,50 @@ export function estimateEmulatorWatts(
 
 /**
  * Solves steady-state road speed (km/h) given power (Watts) and GPX gradient (%)
- * using Newton-Raphson iteration on the cycling power-balance equation.
+ * using guaranteed-convergent bisection on the cycling power-balance equation.
  */
 export function solveSpeedFromPower(
   watts: number,
   gradePercent: number,
   config: RiderConfig
 ): number {
-  if (watts <= 2 && gradePercent >= -0.5) return 0;
+  const safeWatts = Math.max(0, Number.isFinite(watts) ? watts : 0);
+  const safeGrade = Math.max(-25, Math.min(25, Number.isFinite(gradePercent) ? gradePercent : 0));
 
   const totalMass = config.riderWeightKg + config.bikeWeightKg;
-  const theta = Math.atan(gradePercent / 100);
+  const theta = Math.atan(safeGrade / 100);
   const drivetrainEfficiency = 0.975;
-  const pWheel = Math.max(0, watts) * drivetrainEfficiency;
+  const pWheel = safeWatts * drivetrainEfficiency;
 
   const fGravity = totalMass * GRAVITY * Math.sin(theta);
   const fRolling = totalMass * GRAVITY * config.crr * Math.cos(theta);
-  const kAero = 0.5 * AIR_DENSITY * config.cda;
+  const fNet = fGravity + fRolling;
+  const kAero = Math.max(0.05, 0.5 * AIR_DENSITY * config.cda);
 
-  // Coasting on steep descents has terminal velocity even at 0W
-  let v = 8.0; // initial guess m/s (~28.8 km/h)
-  for (let i = 0; i < 20; i++) {
-    const fTotal = fGravity + fRolling + kAero * v * v;
-    const f = v * fTotal - pWheel;
-    const df = fGravity + fRolling + 3 * kAero * v * v;
-    if (Math.abs(df) < 1e-6) break;
-    const nextV = v - f / df;
-    if (nextV <= 0.1) {
-      v = 0.1;
-      break;
-    }
-    if (Math.abs(nextV - v) < 1e-4) {
-      v = nextV;
-      break;
-    }
-    v = nextV;
+  // Stopped when not pedaling on flat or uphill grades
+  if (pWheel <= 1 && fNet >= -0.5) return 0;
+
+  const powerAtSpeed = (v: number) => v * (fNet + kAero * v * v);
+
+  // When fNet < 0 (downhill), powerAtSpeed is strictly increasing for all v >= vTerm
+  let lo = fNet < 0 ? Math.sqrt(-fNet / kAero) : 0;
+  let hi = Math.max(lo + 15, 45);
+  while (powerAtSpeed(hi) < pWheel && hi < 120) {
+    hi *= 1.5;
   }
 
-  // Handle stopped / near-zero power uphill
-  if (pWheel <= 1 && fGravity + fRolling >= 0) return 0;
+  for (let i = 0; i < 40; i++) {
+    const mid = 0.5 * (lo + hi);
+    if (powerAtSpeed(mid) < pWheel) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
 
+  const v = 0.5 * (lo + hi);
   const kmh = v * 3.6;
+  if (kmh < 0.5 && pWheel <= 3) return 0;
   return Math.max(0, Math.min(95, Number(kmh.toFixed(1))));
 }
 
@@ -164,135 +167,49 @@ export function solvePowerFromSpeed(
 }
 
 /**
- * Evaluates live power & speed against user targets and returns explicit "Harder" / "Easier" / "On Target" cue.
+ * Evaluates live 3-second average power against target watts and returns explicit "Harder" / "Easier" / "On Target" cue.
  */
 export function evaluateCoaching(params: {
   isActive: boolean;
   watts: number;
-  speedKmh: number;
   targetWatts: number;
   wattTolerance: number;
-  targetSpeedKmh: number;
-  speedToleranceKmh: number;
-  coachingMode: CoachingMode;
 }): CoachingStatus {
-  const {
-    isActive,
-    watts,
-    speedKmh,
-    targetWatts,
-    wattTolerance,
-    targetSpeedKmh,
-    speedToleranceKmh,
-    coachingMode,
-  } = params;
+  const { isActive, watts, targetWatts, wattTolerance } = params;
 
   const wattDelta = Math.round(targetWatts - watts);
-  const speedDeltaKmh = Number((targetSpeedKmh - speedKmh).toFixed(1));
 
-  if (!isActive || (watts < 5 && speedKmh < 1)) {
+  if (!isActive || watts < 5) {
     return {
       cue: 'idle',
       headline: 'READY TO RIDE',
-      detail: `Target ${targetWatts} W · ${targetSpeedKmh.toFixed(1)} km/h`,
+      detail: `Target ${targetWatts} W`,
       wattDelta,
-      speedDeltaKmh,
     };
   }
 
-  const wattTooLow = wattDelta > wattTolerance;
-  const wattTooHigh = wattDelta < -wattTolerance;
-  const speedTooLow = speedDeltaKmh > speedToleranceKmh;
-  const speedTooHigh = speedDeltaKmh < -speedToleranceKmh;
-
-  if (coachingMode === 'watts') {
-    if (wattTooLow) {
-      return {
-        cue: 'harder',
-        headline: 'PUSH HARDER',
-        detail: `+${wattDelta} W needed to hit ${targetWatts} W`,
-        wattDelta,
-        speedDeltaKmh,
-      };
-    }
-    if (wattTooHigh) {
-      return {
-        cue: 'easier',
-        headline: 'EASIER',
-        detail: `${Math.abs(wattDelta)} W over target (${targetWatts} W)`,
-        wattDelta,
-        speedDeltaKmh,
-      };
-    }
-    return {
-      cue: 'on-target',
-      headline: 'ON TARGET',
-      detail: `Holding ${watts} W within ±${wattTolerance} W`,
-      wattDelta,
-      speedDeltaKmh,
-    };
-  }
-
-  if (coachingMode === 'speed') {
-    if (speedTooLow) {
-      return {
-        cue: 'harder',
-        headline: 'PUSH HARDER',
-        detail: `+${speedDeltaKmh.toFixed(1)} km/h needed for ${targetSpeedKmh.toFixed(1)} km/h`,
-        wattDelta,
-        speedDeltaKmh,
-      };
-    }
-    if (speedTooHigh) {
-      return {
-        cue: 'easier',
-        headline: 'EASIER',
-        detail: `${Math.abs(speedDeltaKmh).toFixed(1)} km/h over target (${targetSpeedKmh.toFixed(1)} km/h)`,
-        wattDelta,
-        speedDeltaKmh,
-      };
-    }
-    return {
-      cue: 'on-target',
-      headline: 'ON TARGET',
-      detail: `Holding ${speedKmh.toFixed(1)} km/h within ±${speedToleranceKmh.toFixed(1)} km/h`,
-      wattDelta,
-      speedDeltaKmh,
-    };
-  }
-
-  // Dual ('both') mode: prioritize power & speed deviations cleanly
-  if (wattTooLow || speedTooLow) {
-    const parts: string[] = [];
-    if (wattTooLow) parts.push(`+${wattDelta} W`);
-    if (speedTooLow) parts.push(`+${speedDeltaKmh.toFixed(1)} km/h`);
+  if (wattDelta > wattTolerance) {
     return {
       cue: 'harder',
       headline: 'PUSH HARDER',
-      detail: `Need ${parts.join(' · ')}`,
+      detail: `+${wattDelta} W needed to hit ${targetWatts} W`,
       wattDelta,
-      speedDeltaKmh,
     };
   }
 
-  if (wattTooHigh || speedTooHigh) {
-    const parts: string[] = [];
-    if (wattTooHigh) parts.push(`${Math.abs(wattDelta)} W over`);
-    if (speedTooHigh) parts.push(`${Math.abs(speedDeltaKmh).toFixed(1)} km/h over`);
+  if (wattDelta < -wattTolerance) {
     return {
       cue: 'easier',
       headline: 'EASIER',
-      detail: parts.join(' · '),
+      detail: `${Math.abs(wattDelta)} W over target (${targetWatts} W)`,
       wattDelta,
-      speedDeltaKmh,
     };
   }
 
   return {
     cue: 'on-target',
     headline: 'ON TARGET',
-    detail: `Watts (${watts} W) & Speed (${speedKmh.toFixed(1)} km/h) locked in`,
+    detail: `Holding ${watts} W within ±${wattTolerance} W`,
     wattDelta,
-    speedDeltaKmh,
   };
 }
