@@ -1,0 +1,6 @@
+{
+  "name": "VeloRoute",
+  "description": "Indoor cycling simulator with Wahoo KICKR Bluetooth control, GPX + video speed sync, target watt/speed coaching, and Zwift Cog & Click v2 virtual shifting.",
+  "requestFramePermissions": ["bluetooth"],
+  "majorCapabilities": []
+}
